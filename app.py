@@ -35,80 +35,184 @@ year = st.sidebar.slider(
     value=2010
 )
 
-yaxis_co2 = st.sidebar.radio("CO2 Measure", ['co2', 'co2_per_capita'])
-yaxis_co2_source = st.sidebar.radio("CO2 Source", ['coal_co2', 'oil_co2', 'gas_co2'])
-
 continents = ['World', 'Asia', 'Oceania', 'Europe', 'Africa', 'North America', 'South America', 'Antarctica']
 continents_excl_world = ['Asia', 'Oceania', 'Europe', 'Africa', 'North America', 'South America', 'Antarctica']
 
 # ---------------------------
 # 3. CO2 over time by continent
 # ---------------------------
-st.subheader("CO2 Emissions by Continent")
+st.subheader("CO₂ Emissions over Time by Continent")
 
-co2_pipeline = (
+# Pretty label → actual df column mapping
+co2_label_map = {
+    "CO₂": "co2",
+    "CO₂/capita": "co2_per_capita",
+}
+
+col1, col2 = st.columns([1,4])
+with col1:
+    pretty_CO2 = st.radio(
+        "CO₂ Measure",
+        list(co2_label_map.keys()),
+        horizontal=True
+    )
+
+# Convert pretty label → actual dataframe column
+yaxis_CO2 = co2_label_map[pretty_CO2]
+
+CO2_pipeline = (
     df[(df['year'] <= year) & (df['country'].isin(continents))]
-      .groupby(['country', 'year'])[yaxis_co2].mean()
+      .groupby(['country', 'year'])[yaxis_CO2].mean()
       .reset_index()
       .sort_values('year')
 )
 
-fig_co2 = px.line(
-    co2_pipeline,
+fig_CO2 = px.line(
+    CO2_pipeline,
     x='year',
-    y=yaxis_co2,
+    y=yaxis_CO2,
     color='country',
-    title=f"{yaxis_co2} over Time by Continent"
+    title=f"{pretty_CO2} over Time by Continent"
 )
-st.plotly_chart(fig_co2, use_container_width=True)
+
+st.plotly_chart(fig_CO2, use_container_width=True)
 
 # ---------------------------
 # 4. CO2 vs GDP scatter
 # ---------------------------
-st.subheader(f"CO2 vs GDP per Capita ({year})")
+st.subheader(f"CO₂ vs GDP per Capita ({year})")
 
-co2_vs_gdp_pipeline = (
+CO2_vs_gdp_pipeline = (
     df[(df['year'] == year) & (~df['country'].isin(continents))]
       .groupby(['country', 'gdp_per_capita'])['co2'].mean()
       .reset_index()
 )
 
 fig_scatter = px.scatter(
-    co2_vs_gdp_pipeline,
+    CO2_vs_gdp_pipeline,
     x='gdp_per_capita',
     y='co2',
     color='country',
     hover_name='country',
-    size=np.ones(len(co2_vs_gdp_pipeline)) * 10,
-    title=f"CO2 vs GDP per Capita ({year})",
-    labels={'gdp_per_capita':'GDP per Capita', 'co2':'CO2 Emissions'}
+    size=np.ones(len(CO2_vs_gdp_pipeline)) * 10,
+    title=f"CO₂ vs GDP per Capita ({year})",
+    labels={'gdp_per_capita':'GDP per Capita', 'CO2':'CO₂ Emissions'}
 )
 st.plotly_chart(fig_scatter, use_container_width=True)
 
 # ---------------------------
 # 5. CO2 source bar chart
 # ---------------------------
-st.subheader(f"CO2 Sources by Continent ({year})")
+# ---------------------------
+# 5. CO₂ Source bar chart (local controls)
+# ---------------------------
+st.subheader(f"CO₂ Sources by Continent ({year})")
 
-co2_source_pipeline = (
+# Map pretty labels → actual dataframe column names
+source_label_map = {
+    "CO₂ from Coal": "coal_co2",
+    "CO₂ from Oil": "oil_co2",
+    "CO₂ from Gas": "gas_co2",
+}
+
+# Local-only options for source type
+pretty_choice = st.radio(
+    "Select CO₂ Source:",
+    list(source_label_map.keys()),
+    horizontal=True,
+    key="source_selector"
+)
+
+# Convert label → column name
+yaxis_CO2_source = source_label_map[pretty_choice]
+
+CO2_source_pipeline = (
     df[(df['year'] == year) & (df['country'].isin(continents_excl_world))]
-      .groupby(['country'])[yaxis_co2_source].sum()
+      .groupby(['country'])[yaxis_CO2_source].sum()
       .reset_index()
-      .sort_values(yaxis_co2_source, ascending=False)
+      .sort_values(yaxis_CO2_source, ascending=False)
 )
 
 fig_bar = px.bar(
-    co2_source_pipeline,
+    CO2_source_pipeline,
     x='country',
-    y=yaxis_co2_source,
+    y=yaxis_CO2_source,
     color='country',
-    title=f"{yaxis_co2_source} Emissions by Continent",
-    labels={yaxis_co2_source:yaxis_co2_source.capitalize()}
+    title=f"{pretty_choice} by Continent ({year})",
+    labels={yaxis_CO2_source: pretty_choice}
 )
+
 st.plotly_chart(fig_bar, use_container_width=True)
+
 
 # ---------------------------
 # 6. Optional table view
 # ---------------------------
-st.subheader("CO2 Data Table")
-st.dataframe(co2_pipeline)
+st.subheader("CO₂ Data Table")
+st.dataframe(CO2_pipeline)
+
+@st.cache_data
+def load_country_coords():
+    url = "https://raw.githubusercontent.com/johan/world.geo.json/master/countries.geo.json"
+    geojson = requests.get(url).json()
+
+    rows = []
+    for feat in geojson["features"]:
+        props = feat["properties"]
+        geometry = feat["geometry"]
+
+        # Extract centroid of polygon
+        if geometry["type"] == "Polygon":
+            coords = np.array(geometry["coordinates"][0])
+        else:  # MultiPolygon
+            coords = np.array(geometry["coordinates"][0][0])
+
+        lon = coords[:, 0].mean()
+        lat = coords[:, 1].mean()
+
+        rows.append({
+            "country": props["name"],
+            "latitude": lat,
+            "longitude": lon,
+        })
+
+    return pd.DataFrame(rows)
+
+
+coords = load_country_coords()
+df = df.merge(coords, on="country", how="left")
+
+st.subheader(f"Global CO₂ Heatmap ({year})")
+
+df_3d = df[df["year"] == year].copy()
+
+fig_globe = px.choropleth(
+    df_3d,
+    locations="iso_code",      # must be ISO country codes (OWID already has this)
+    color="co2",               # heatmap variable
+    hover_name="country",
+    projection="orthographic", # <-- Makes it a globe
+    color_continuous_scale="Reds",
+    range_color=(0, 17000)
+)
+
+fig_globe.update_geos(
+    showcoastlines=True,
+    coastlinecolor="black",
+    showland=True,
+    landcolor="rgb(230,230,230)",
+    showocean=True,
+    oceancolor="rgb(180,220,250)",
+)
+
+fig_globe.update_layout(
+    height=700,
+    margin=dict(l=0, r=0, t=40, b=0),
+    coloraxis_colorbar=dict(
+        title="CO₂ (Mt)",
+        thicknessmode="pixels", thickness=15,
+        lenmode="fraction", len=0.75
+    )
+)
+
+st.plotly_chart(fig_globe, use_container_width=True)
